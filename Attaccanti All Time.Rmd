@@ -1,0 +1,337 @@
+---
+title: "R Notebook"
+output: pdf_document
+---
+Per prima cosa necessitiamo di installare i pacchetti necessari per il nostro progetto.
+
+```{r setup, include=FALSE}
+
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+install.packages(c("FactoMineR", "ggplot2", "cluster", "dplyr", "tidyverse", "factoextra"))
+install.packages("rpart")
+install.packages("rpart.plot")
+install.packages("randomForest")
+install.packages("caret")
+```
+```{r}
+library(FactoMineR)
+library(ggplot2)
+library(cluster)
+library(dplyr)
+library(tidyverse)
+library(factoextra)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(caret)
+
+```
+Cominciamo leggendo il file per l'analisi.
+```{r}
+df <- read.csv("C:/Users/filip/Desktop/attaccanti italiani/dataset scraped/Statistiche_Giocatori_all_Time.csv")
+
+```
+
+
+```{r}
+df$Gol.per.Minuti <- as.numeric(gsub("'", "", df$Gol.per.Minuti))
+df$Gol.per.Minuti.in.Nazionale <- as.numeric(gsub("'", "", df$Gol.per.Minuti.in.Nazionale))
+df$Minuti.Giocati.in.Nazionale <- as.numeric(gsub("'", "", df$Minuti.Giocati.in.Nazionale))
+df$Minuti.Giocati <- as.numeric(gsub("'", "", df$Minuti.Giocati))
+
+```
+```{r}
+str(df)
+```
+
+#Esplorazione Dati
+
+Cominciamo inizialmente eseguendo una piccola Esplorazione dei Dati
+```{r}
+print(summary(df))
+```
+```{r}
+numeric_vars <- names(df)[sapply(df, is.numeric)]
+numeric_vars <- setdiff(numeric_vars, "Gol.in.Nazionale")
+
+# Crea un grafico scatter per ogni variabile numerica contro "Gol.in.Nazionale"
+for (var in numeric_vars) {
+  p <- ggplot(df, aes_string(x = var, y = "Gol.in.Nazionale")) +
+    geom_point() +
+    labs(title = paste("Gol in Nazionale vs", var),
+         x = var, 
+         y = "Gol in Nazionale") +
+    theme_minimal()
+  print(p)
+}
+```
+Controlliamo la presenza di valori mancanti.
+
+```{r}
+sum(is.na(df))
+```
+```{r}
+df_clean <- na.omit(df)
+```
+
+```{r}
+df_clean <- df_clean %>% mutate_if(~ is.character(.) && !all(. == df_clean$Player.Name), ~ as.numeric(as.character(.)))
+```
+
+```{r}
+str(df_clean)
+```
+
+
+# Analisi delle Componenti Principali (ACP)
+```{r}
+# Eseguiamo una PCA sul dataset pulito, selezionando solo le colonne numeriche
+data_numeric <- df_clean %>% select_if(is.numeric)
+
+# Eseguire PCA
+pca_result <- PCA(data_numeric, scale.unit = TRUE)
+
+# Visualizzare i risultati della PCA
+summary(pca_result)
+print(pca_result)
+
+```
+**Grafico 1: PCA graph of individuals**
+Il grafico PCA degli individui mostra la distribuzione dei giocatori in base alle prime due componenti principali. La prima componente (Dim 1) spiega il 35.16% della varianza totale, mentre la seconda componente (Dim 2) spiega l'11.59%. I punti nel grafico rappresentano i giocatori, con le loro coordinate determinate dalle componenti principali. I giocatori che sono vicini nel grafico hanno profili simili in termini di variabili misurate, mentre quelli distanti hanno profili diversi. Ad esempio, il giocatore numero 29 (Francesco Totti) si distingue chiaramente dagli altri, suggerendo caratteristiche eccezionali.
+
+**Grafico 2: PCA graph of variables**
+Il grafico PCA delle variabili mostra le relazioni tra le variabili originali del dataset. Le frecce rappresentano le variabili, con la lunghezza della freccia che indica il contributo della variabile alla componente principale. Le variabili vicine tra loro sono altamente correlate. Ad esempio, Minuti.Giocati.in.Nazionale e Gol.per.Minuti sono fortemente correlate. Inoltre, Presenze.Totali, Assist, e Cartellino.Giallo mostrano correlazioni tra loro. Le variabili lungo la circonferenza dell'unità sono ben rappresentate dalle due componenti principali.
+```{r}
+# Barplot degli autovalori
+barplot(pca_result$eig[,1], main = "Screeplot", col=c(rep("green",3), rep("red",3)))
+abline(h=1, col="blue")
+
+# Coordinate delle variabili
+pca_result$var$coord
+
+# Coordinate degli individui
+pca_result$ind$coord
+```
+Il barplot degli autovalori mostra che le prime tre componenti principali spiegano la maggior parte della varianza nei dati, con autovalori significativamente superiori a 1. Questo suggerisce che queste componenti sono importanti e dovrebbero essere considerate nell'analisi. Le componenti successive hanno autovalori inferiori a 1, indicando che spiegano una varianza marginale e possono essere trascurate. Pertanto, possiamo concentrare la nostra analisi sulle prime tre componenti principali per ottenere una rappresentazione significativa della varianza nel dataset
+
+
+
+```{r}
+str(df_clean)
+```
+
+# Clustering
+
+```{r}
+
+df_clean <- na.omit(df_clean)
+
+# Escludere la colonna Player.Name per la normalizzazione
+df_clean_numeric <- df_clean %>% select(-Player.Name)
+
+# Verifica il tipo di ogni colonna
+str(df_clean_numeric)
+
+df_clean_numeric <- df_clean_numeric %>%
+  mutate(across(everything(), as.numeric))
+
+# Verifica nuovamente il tipo di ogni colonna
+str(df_clean_numeric)
+
+# Normalizzare i dati
+df_clean_scaled <- scale(df_clean_numeric)
+
+# Utilizzare il metodo Elbow per trovare il numero ottimale di cluster
+fviz_nbclust(df_clean_scaled, kmeans, method = "wss")
+
+# Utilizzare il metodo della silhouette per trovare il numero ottimale di cluster
+fviz_nbclust(df_clean_scaled, kmeans, method = "silhouette")
+
+
+set.seed(123)
+kmeans_result <- kmeans(df_clean_scaled, centers = 3, nstart = 25)
+
+# Aggiungere i cluster al dataframe
+df_clean$cluster <- as.factor(kmeans_result$cluster)
+
+# Visualizzare i cluster ottenuti
+fviz_cluster(kmeans_result, data = df_clean_scaled,
+             ellipse.type = "convex",
+             palette = "jco",
+             ggtheme = theme_minimal())
+```
+
+```{r}
+# Aggiungere i cluster al dataframe originale
+df$cluster <- as.factor(kmeans_result$cluster)
+
+# Calcolare le medie delle variabili per ciascun cluster
+cluster_means <- df %>%
+  group_by(cluster) %>%
+  summarise_all(list(mean = mean), na.rm = TRUE)
+
+# Visualizzare le medie
+print(cluster_means)
+
+```
+
+```{r}
+correlation_matrix <- cor(df_clean_scaled)
+heatmap(correlation_matrix, symm = TRUE)
+```
+
+
+```{r}
+train_set <- read.csv("C:/Users/filip/Desktop/attaccanti italiani/dataset scraped/train_set.csv")
+test_set <- read.csv("C:/Users/filip/Desktop/attaccanti italiani/dataset scraped/test_set.csv")
+```
+```{r}
+
+train_set$Gol.per.Minuti <- as.numeric(gsub("'", "", train_set$Gol.per.Minuti))
+train_set$Gol.per.Minuti.in.Nazionale <- as.numeric(gsub("'", "", train_set$Gol.per.Minuti.in.Nazionale))
+train_set$Minuti.Giocati.in.Nazionale <- as.numeric(gsub("'", "", train_set$Minuti.Giocati.in.Nazionale))
+train_set$Minuti.Giocati <- as.numeric(gsub("'", "", train_set$Minuti.Giocati))
+
+test_set$Gol.per.Minuti <- as.numeric(gsub("'", "", test_set$Gol.per.Minuti))
+test_set$Gol.per.Minuti.in.Nazionale <- as.numeric(gsub("'", "", test_set$Gol.per.Minuti.in.Nazionale))
+test_set$Minuti.Giocati.in.Nazionale <- as.numeric(gsub("'", "", test_set$Minuti.Giocati.in.Nazionale))
+test_set$Minuti.Giocati <- as.numeric(gsub("'", "", test_set$Minuti.Giocati))
+
+str(train_set)
+```
+### Spiegazione del Clustering
+
+Nella fase di clustering, abbiamo raggruppato i giocatori in base alle loro caratteristiche prestazionali per identificare gruppi omogenei. Dopo aver pulito e normalizzato i dati, abbiamo determinato il numero ottimale di cluster utilizzando i metodi Elbow e della silhouette. Il metodo Elbow ha aiutato a identificare il punto in cui l'aggiunta di ulteriori cluster non riduceva significativamente la varianza interna ai cluster, mentre il metodo della silhouette ha valutato quanto bene ogni punto si adattava al proprio cluster rispetto agli altri. Abbiamo quindi eseguito il clustering K-means con il numero ottimale di cluster (3 in questo caso), partizionando i dati in gruppi con caratteristiche simili. I cluster risultanti sono stati visualizzati per mostrare la distribuzione dei giocatori, e sono state calcolate le medie delle variabili per ciascun cluster per comprenderne le caratteristiche distintive. Infine, abbiamo creato una heatmap della matrice di correlazione per visualizzare le relazioni tra le variabili normalizzate, identificando variabili fortemente correlate e comprendendo meglio la struttura dei dati. Questi risultati ci permettono di segmentare i giocatori in gruppi omogenei, facilitando l'analisi comparativa delle prestazioni.
+
+# CART
+```{r}
+train_player_names <- train_set$Player.Name
+test_player_names <- test_set$Player.Name
+
+# Assicurarsi che la variabile target sia numerica
+train_set$Gol.in.Nazionale <- as.numeric(train_set$Gol.in.Nazionale)
+test_set$Gol.in.Nazionale <- as.numeric(test_set$Gol.in.Nazionale)
+
+# Rimuovere solo la colonna `Player.Name` dai dataset
+train_set <- subset(train_set, select = -c(Player.Name))
+test_set <- subset(test_set, select = -c(Player.Name))
+
+# Rimuovere righe con valori mancanti
+train_set <- na.omit(train_set)
+test_set <- na.omit(test_set)
+
+# Creare il modello CART
+cart_model <- rpart(Gol.in.Nazionale ~ ., data = train_set, method = "anova")
+
+# Visualizzare l'albero di decisione
+rpart.plot(cart_model, type = 3, digits = 2)
+
+# Fare previsioni sul test set
+cart_predictions <- predict(cart_model, newdata = test_set)
+
+# Arrotondare le predizioni ai valori interi più vicini
+cart_predictions <- round(cart_predictions)
+
+# Calcolare il Mean Absolute Error (MAE)
+mae <- mean(abs(cart_predictions - test_set$Gol.in.Nazionale))
+print(paste("Mean Absolute Error:", round(mae, 2)))
+
+# Calcolare il Mean Squared Error (MSE)
+mse <- mean((cart_predictions - test_set$Gol.in.Nazionale)^2)
+print(paste("Mean Squared Error:", round(mse, 2)))
+
+# Calcolare il R-squared
+r_squared <- 1 - sum((cart_predictions - test_set$Gol.in.Nazionale)^2) / sum((mean(train_set$Gol.in.Nazionale) - test_set$Gol.in.Nazionale)^2)
+print(paste("R-squared:", round(r_squared, 2)))
+
+# Aggiungere le predizioni e i nomi dei giocatori al test set
+test_set$Predicted_Goals <- cart_predictions
+test_set$Player.Name <- test_player_names
+
+# Calcolare la differenza tra i gol effettivamente fatti e i gol predetti
+test_set$Difference <- test_set$Gol.in.Nazionale - test_set$Predicted_Goals
+
+# Suddividere i giocatori in overperforming e underperforming
+test_set$Performance <- ifelse(test_set$Difference > 0, "Overperforming", "Underperforming")
+
+# Visualizzare i risultati
+head(test_set)
+
+# Visualizzare solo i giocatori overperforming
+overperforming_players <- test_set[test_set$Performance == "Overperforming", ]
+print("Overperforming Players:")
+for (player in overperforming_players$Player.Name) {
+  print(paste("Overperforming:", player))
+}
+
+```
+
+## Risultati CART
+
+Per prevedere il numero di gol segnati in nazionale dai giocatori, abbiamo utilizzato un modello di albero decisionale (CART - Classification and Regression Tree). Dopo aver caricato e pulito i dataset di allenamento e di test, abbiamo costruito il modello CART utilizzando il dataset di allenamento. Il modello è stato addestrato a partire dalle variabili disponibili, escludendo il nome del giocatore, che è stato conservato separatamente per l'identificazione.
+
+Una volta addestrato il modello, abbiamo fatto previsioni sui dati del test set e arrotondato le predizioni ai valori interi più vicini, poiché i gol sono una variabile discreta. Abbiamo calcolato le metriche di valutazione del modello, ottenendo un Mean Absolute Error (MAE) di 4.91, un Mean Squared Error (MSE) di 53 e un R-squared di -0.69. Questi risultati indicano che il modello ha prestazioni subottimali e una capacità molto limitata di spiegare la varianza nei dati, suggerendo la necessità di miglioramenti o di considerare modelli alternativi.
+
+
+# Random Forest
+```{r}
+
+# Identificare le variabili character
+character_vars_train <- sapply(train_set, is.character)
+character_vars_test <- sapply(test_set, is.character)
+
+# Rimuovere le variabili character dai dataset
+train_set <- train_set[, !character_vars_train]
+test_set <- test_set[, !character_vars_test]
+
+train_set$Gol.in.Nazionale <- as.numeric(train_set$Gol.in.Nazionale)
+test_set$Gol.in.Nazionale <- as.numeric(test_set$Gol.in.Nazionale)
+
+# Rimuovere righe con valori mancanti
+train_set <- na.omit(train_set)
+test_set <- na.omit(test_set)
+
+# Creare il modello Random Forest per la regressione
+rf_model <- randomForest(Gol.in.Nazionale ~ ., data = train_set, ntree = 100)
+
+# Fare previsioni sul test set
+rf_predictions <- predict(rf_model, newdata = test_set)
+
+rf_predictions <- round(rf_predictions)
+
+# Calcolare il Mean Absolute Error (MAE)
+mae <- mean(abs(rf_predictions - test_set$Gol.in.Nazionale))
+print(paste("Mean Absolute Error:", round(mae, 2)))
+
+# Calcolare il Mean Squared Error (MSE)
+mse <- mean((rf_predictions - test_set$Gol.in.Nazionale)^2)
+print(paste("Mean Squared Error:", round(mse, 2)))
+
+# Calcolare il R-squared
+r_squared <- 1 - sum((rf_predictions - test_set$Gol.in.Nazionale)^2) / sum((mean(train_set$Gol.in.Nazionale) - test_set$Gol.in.Nazionale)^2)
+print(paste("R-squared:", round(r_squared, 2)))
+```
+```{r}
+# Aggiungere le predizioni e i nomi dei giocatori al test set
+test_set$Predicted_Goals <- rf_predictions
+test_player_names <- test_set$Player.Name
+
+# Calcolare la differenza tra i gol effettivamente fatti e i gol predetti
+test_set$Difference <- test_set$Gol.in.Nazionale - test_set$Predicted_Goals
+
+# Suddividere i giocatori in overperforming e underperforming
+test_set$Performance <- ifelse(test_set$Difference > 0, "Overperforming", "Underperforming")
+
+
+```
+
+## Risultati Random Foresest
+I risultati dell'analisi ci hanno permesso di identificare chiaramente quali giocatori hanno superato le aspettative (overperforming) e quali hanno reso meno rispetto a quanto previsto (underperforming). Questa classificazione può fornire spunti utili per gli allenatori e gli analisti per comprendere meglio le prestazioni dei giocatori in nazionale.
+
+In particolare i giocatori che hanno superato le aspettative sono;
+- Davide Frattesi
+- Matteo Pessina
+- Pietro Iemmello
+
+
+Le differenze tra i giocatori classificati come overperforming e underperforming nei modelli CART e Random Forest possono essere attribuite alle caratteristiche distintive di questi algoritmi. Il modello CART, che utilizza un singolo albero decisionale, è più sensibile al rumore nei dati e può sovra-adattarsi alle specifiche del dataset di addestramento, portando a previsioni meno stabili. Al contrario, Random Forest, costruendo molti alberi decisionali e aggregando i loro risultati, tende a ridurre l'overfitting e a fornire previsioni più stabili e robuste. Questa aggregazione permette a Random Forest di essere meno influenzato dalle peculiarità del dataset di addestramento, risultando in una classificazione dei giocatori che potrebbe differire significativamente da quella ottenuta con un singolo albero CART. Pertanto, le differenze nei risultati tra i due modelli sono una manifestazione delle loro diverse capacità di generalizzare dai dati di addestramento ai dati di test
